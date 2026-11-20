@@ -189,6 +189,74 @@ def test_default_period_is_latest_activity_month(client, seed_demo_site):
     assert resp.json()["data"]["period"] == "2026-10"
 
 
+def _probe_membership(session, *, name: str, joined_at: str, is_test: bool, deleted: str | None):
+    """插一条「会籍→所属企业」连锁探针：企业被排除（测试账号/软删除）+ 未来时间的会籍。"""
+    c = Company(
+        name=name,
+        org_id="org-demo",
+        site_id="site-east",
+        lifecycle_status="active",
+        is_test_account=is_test,
+        created_by="test",
+    )
+    if deleted:
+        c.deleted_at = _dt(deleted)
+    session.add(c)
+    session.flush()
+    m = Membership(
+        company_id=c.id,
+        tier="standard",
+        status="effective",
+        start_date=joined_at[:10],
+        joined_at=_dt(joined_at),
+        org_id="org-demo",
+        site_id="site-east",
+        created_by="test",
+    )
+    session.add(m)
+    session.flush()
+    return c, m
+
+
+def test_default_period_ignores_test_account_membership(client, seed_demo_site, test_tx):
+    """缺省月份推断的连锁排除（测试账号链）：会籍所属企业 is_test_account=true 时，
+    该会籍不参与缺省月份推断——period 保持 2026-10、NEW_JOINS 保持 1，而不是被
+    未来时间的探针会籍拉到 2030-05（预修复实测会变成 period=2030-05、NEW_JOINS=0）。"""
+    _probe_membership(test_tx, name="探针-测试账号企业", joined_at="2030-05-01T09:00:00", is_test=True, deleted=None)
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-east"},
+        headers=seed_demo_site["headers"],
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["period"] == "2026-10"
+    m = body["data"]["metrics"]
+    assert m["DASH_MEMBERS_NEW_JOINS"]["value"] == 1
+    assert m["DASH_MEMBERS_VERIFIED_END"]["value"] == 8
+    assert m["DASH_MEMBERS_EFFECTIVE_END"]["value"] == 7
+
+
+def test_default_period_ignores_soft_deleted_company_membership(client, seed_demo_site, test_tx):
+    """缺省月份推断的连锁排除（软删除链）：会籍行自身未删除、但所属企业已软删除时，
+    该会籍不参与缺省月份推断——period 保持 2026-10、NEW_JOINS 保持 1（探针会籍在 2029-01）。"""
+    _probe_membership(
+        test_tx, name="探针-软删企业", joined_at="2029-01-01T09:00:00", is_test=False, deleted="2026-11-01T00:00:00"
+    )
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-east"},
+        headers=seed_demo_site["headers"],
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["period"] == "2026-10"
+    m = body["data"]["metrics"]
+    assert m["DASH_MEMBERS_NEW_JOINS"]["value"] == 1
+    assert m["DASH_MEMBERS_VERIFIED_END"]["value"] == 8
+    assert m["DASH_MEMBERS_EFFECTIVE_END"]["value"] == 7
+
+
 def test_cache_second_call_is_cached(client, seed_demo_site):
     """10 分钟缓存：第二次同参请求 meta.cached=true；refresh=1 绕过缓存。"""
     headers = seed_demo_site["headers"]
@@ -227,9 +295,10 @@ def test_empty_site_all_zero_metrics(client, seed_demo_site):
     assert m["DASH_MEMBERS_YOY"]["value"] == {"current": 0, "previous": 0, "delta": 0, "change_bp": None}
 
 
-@pytest.mark.parametrize("bad", ["abc", "2026-14", "202601", "", "0000-01", "0001-01", "2026-1"])
+@pytest.mark.parametrize("bad", ["abc", "2026-14", "202601", "", "0000-01", "0001-01", "2026-1", "9999-12"])
 def test_period_rejects_invalid_formats(client, seed_demo_site, bad):
-    """period 非法一律 400 统一信封：字母、月越界、缺横线、空串、年份越界（0000/0001 会撞 datetime 下限）。"""
+    """period 非法一律 400 统一信封：字母、月越界、缺横线、空串、年份越界
+    （0000/0001 会撞 datetime 下限；9999-12 的次月 10000-01 会撞 datetime 上限）。"""
     resp = client.get(
         "/api/dash/members/overview",
         params={"site_id": "site-east", "period": bad},
@@ -237,6 +306,29 @@ def test_period_rejects_invalid_formats(client, seed_demo_site, bad):
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == 400
+
+
+def test_period_upper_bound_9999_11_accepted(client, seed_demo_site):
+    """period 上界邻值 9999-11 可正常计算（200），不再落入兜底 500。
+
+    注：认证/有效是期末时点口径，看的是期末之前的全部历史，所以 9999-11 的
+    VERIFIED=8（12 家有效企业里 2026-10 时点已认证未流失的 8 家）；窗口流量类
+    指标（本期新增/流失）无窗口内数据计 0。
+    """
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-east", "period": "9999-11"},
+        headers=seed_demo_site["headers"],
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["period"] == "9999-11"
+    m = body["data"]["metrics"]
+    assert m["DASH_MEMBERS_VERIFIED_END"]["value"] == 8
+    assert m["DASH_MEMBERS_NEW_JOINS"]["value"] == 0
+    assert m["DASH_MEMBERS_CHURNED"]["value"] == 0
+    assert len(m["DASH_TREND_EFFECTIVE_12M"]["value"]) == 12
 
 
 def test_cache_disabled_when_ttl_zero(client, seed_demo_site):

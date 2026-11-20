@@ -2,8 +2,11 @@
 
 period 语义：YYYY-MM；期末=当月最后一天 23:59:59 UTC（指标比较用
 [期初, 次月 1 日 00:00:00) 左闭右开窗口，见 metrics._end_exclusive）。
-period 缺省时取数据集里最近的业务月份（会员入会/认证/流失的最大月份）；
+period 缺省时取数据集里最近的业务月份（会员入会/认证/流失的最大月份；
+会籍推断会连锁排除其所属企业被软删/测试账号的行，与指标口径一致）；
 站点没有任何业务数据时取当前月份（新会所空数据首屏返回全 0 而不是报错）。
+显式 period 支持范围 [1970-01, 9999-11)：越界（含 9999-12，次月超出 datetime
+表示范围）按 InvalidPeriod → 400 统一信封拒绝。
 """
 import re
 from datetime import datetime, timezone
@@ -15,6 +18,7 @@ from app.dash import metrics
 from app.dash.calibers import CALIBER_CODES, CALIBER_LIBRARY_VERSION
 from app.dash.cache import overview_cache
 from app.dash.registry import get_calculator
+from app.models.base import soft_delete_filter
 from app.models.caliber import MetricCaliber
 from app.models.company import Company
 from app.models.membership import Membership
@@ -23,6 +27,9 @@ _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 # 年份下界：趋势要往前回退 11 个月，year<13 会撞 datetime 下限（year 0）→ 500；
 # 客户端输入一律按 InvalidPeriod → 400 拒绝。
 MIN_YEAR = 1970
+# 年份上界：period 窗口右开边界 = 次月 1 日（metrics._end_exclusive），
+# 9999-12 的次月是 10000-01，datetime 无法表示 → ValueError → 500；同样按 400 拒绝。
+MAX_PERIOD = "9999-12"
 
 
 class InvalidPeriod(ValueError):
@@ -36,15 +43,23 @@ def parse_period(period: str | None, db: Session, org_id: str, site_id: str) -> 
             raise InvalidPeriod(f"period must be YYYY-MM, got {period!r}")
         if int(period[:4]) < MIN_YEAR:
             raise InvalidPeriod(f"period year must be >= {MIN_YEAR}, got {period!r}")
+        if period >= MAX_PERIOD:
+            raise InvalidPeriod(f"period must be earlier than {MAX_PERIOD}, got {period!r}")
         return period
-    # 缺省：数据集最近业务月份（入会/认证/流失的最大时间；不含记录创建时间）
+    # 缺省：数据集最近业务月份（入会/认证/流失的最大时间；不含记录创建时间）。
+    # 连锁排除：会籍必须 join 其所属企业，企业被软删除或为测试账号时该会籍行
+    # 不参与月份推断（与指标口径一致，被排除的数据不得改变统计窗口）。
     floor = datetime.min.replace(tzinfo=timezone.utc)
     candidates = [
         db.scalar(
-            select(func.max(Membership.joined_at)).where(
+            select(func.max(Membership.joined_at))
+            .join(Company, Membership.company_id == Company.id)
+            .where(
                 Membership.org_id == org_id,
                 Membership.site_id == site_id,
                 Membership.deleted_at.is_(None),
+                soft_delete_filter(Company),
+                Company.is_test_account.is_(False),
             )
         )
         or floor,
