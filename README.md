@@ -26,7 +26,7 @@
 
 （工单 zh-CN 原文；预做包构建时平台返回英文版 "The head of the club can only obtain the club data (test)"，语义相同。）
 
-- **实现**：权限依赖 `require_site_access`（`app/main.py:52`）：请求头 `X-Org-Id` + `X-User-Id` + 查询参数 `site_id` 必须在 `user_roles` 表里有对应授权行，否则 403。会长（club_head）每个站点只有自己一行授权，因此只能取本会数据。错误响应是统一信封 `{"code":403, "message":..., "data":null}`，不泄露任何其他站点数据。
+- **实现**：权限依赖 `require_site_access`（`app/main.py:55`）：请求头 `X-Org-Id` + `X-User-Id` + 查询参数 `site_id` 必须在 `user_roles` 表里有对应授权行，否则 403。会长（club_head）每个站点只有自己一行授权，因此只能取本会数据。错误响应是统一信封 `{"code":403, "message":..., "data":null}`，不泄露任何其他站点数据。
 - **证据**：`tests/test_permission.py` 9 条用例全过：本站 200（`test_club_head_can_read_own_site`）；跨站点 403（`test_club_head_cannot_read_other_site`）；跨组织 403（`test_club_head_cannot_read_other_org_site`）；org 不匹配 403（`test_org_mismatch_rejected`）；未知用户 403（`test_unknown_user_rejected`）；缺头 422（`test_missing_headers_rejected`）；缺 site_id 422（`test_missing_site_id_rejected`）；admin 多站授权可读（`test_admin_can_read_authorized_sites`）；只给角色名不给授权行不给权限（`test_role_name_alone_grants_nothing`）。
 
 ### 验收 3：响应中每个指标都带口径版本（测试）
