@@ -1,9 +1,12 @@
 """指标计算函数（纯函数，按口径库编码一一对应）。
 
 签名统一为 fn(db, org_id, site_id, period_start, period_end) -> 值。
-period_start/period_end 为该期的起止时间（UTC，期末=当月最后一天 23:59:59）。
-所有查询统一排除：软删除（deleted_at 非空）、测试账号（is_test_account=true）、
-且只取本 org_id + site_id 的数据（多租户隔离）。
+period_start/period_end 为该期的起止时间（UTC）：期初=当月 1 日 00:00:00，
+period_end 为展示用的期末（当月最后一天 23:59:59）；实际比较统一用
+[期初, 次月 1 日 00:00:00) 左闭右开窗口（_end_exclusive），因此落在期末
+最后一秒内任意微秒（23:59:59.000001~23:59:59.999999）的事件都被计入。
+所有查询统一排除两级软删除（企业与会籍各自的 deleted_at 非空）、
+测试账号（is_test_account=true），且只取本 org_id + site_id 的数据（多租户隔离）。
 """
 import calendar
 from datetime import datetime, timezone
@@ -28,6 +31,21 @@ def _company_cond(org_id: str, site_id: str):
     )
 
 
+def _membership_cond(org_id: str, site_id: str):
+    """会籍表的公共过滤条件：租户隔离 + 会籍行自身的软删除（企业级过滤另见 _company_cond）。"""
+    return (
+        Membership.org_id == org_id,
+        Membership.site_id == site_id,
+        soft_delete_filter(Membership),
+    )
+
+
+def _end_exclusive(period_end: datetime) -> datetime:
+    """次月 1 日 00:00:00 UTC：期末窗口的右开边界（含期末最后一微秒）。"""
+    year, month = (period_end.year, period_end.month + 1) if period_end.month < 12 else (period_end.year + 1, 1)
+    return datetime(year, month, 1, tzinfo=timezone.utc)
+
+
 def _effective_membership_cond(period_end: datetime):
     """会籍生效中（期末口径）：start_date <= 期末日 且 (end_date 为空 或 >= 期末日)。"""
     end_day = period_end.date()
@@ -39,21 +57,19 @@ def _effective_membership_cond(period_end: datetime):
 
 
 def verified_members_end(db: Session, org_id: str, site_id: str, period_start: datetime, period_end: datetime) -> int:
-    """DASH_MEMBERS_VERIFIED_END：认证会员企业数（期末）。"""
+    """DASH_MEMBERS_VERIFIED_END：认证会员企业数（期末，时点口径：期末前已认证且期末未流失）。"""
+    end_exclusive = _end_exclusive(period_end)
     cond = _company_cond(org_id, site_id) + (
         Company.verified_at.isnot(None),
-        Company.verified_at <= period_end,
-        (Company.churned_at.is_(None)) | (Company.churned_at > period_end),
+        Company.verified_at < end_exclusive,
+        (Company.churned_at.is_(None)) | (Company.churned_at >= end_exclusive),
     )
     return int(db.scalar(select(func.count()).select_from(Company).where(*cond)) or 0)
 
 
 def effective_members_end(db: Session, org_id: str, site_id: str, period_start: datetime, period_end: datetime) -> int:
     """DASH_MEMBERS_EFFECTIVE_END：有效会员企业数（期末，会籍生效中），按企业去重。"""
-    cond = _company_cond(org_id, site_id) + (
-        Membership.org_id == org_id,
-        Membership.site_id == site_id,
-        soft_delete_filter(Company),
+    cond = _company_cond(org_id, site_id) + _membership_cond(org_id, site_id) + (
         *_effective_membership_cond(period_end),
     )
     return int(
@@ -68,17 +84,15 @@ def effective_members_end(db: Session, org_id: str, site_id: str, period_start: 
 
 
 def new_joins_in_period(db: Session, org_id: str, site_id: str, period_start: datetime, period_end: datetime) -> int:
-    """DASH_MEMBERS_NEW_JOINS：本期新增入会数（joined_at 落在期内，按企业去重）。
+    """DASH_MEMBERS_NEW_JOINS：本期新增入会数（joined_at 落在 [期初, 次月 1 日) 内，按企业去重）。
 
-    按口径定义只看 joined_at 是否落在 [期初, 期末]，不限定会籍当前状态
+    按口径定义只看 joined_at 是否落在期内，不限定会籍当前状态
     （期内入会后又流失的企业也计入新增）。
     """
-    cond = _company_cond(org_id, site_id) + (
-        Membership.org_id == org_id,
-        Membership.site_id == site_id,
-        soft_delete_filter(Company),
+    end_exclusive = _end_exclusive(period_end)
+    cond = _company_cond(org_id, site_id) + _membership_cond(org_id, site_id) + (
         Membership.joined_at >= period_start,
-        Membership.joined_at <= period_end,
+        Membership.joined_at < end_exclusive,
     )
     return int(
         db.scalar(
@@ -92,11 +106,12 @@ def new_joins_in_period(db: Session, org_id: str, site_id: str, period_start: da
 
 
 def churned_in_period(db: Session, org_id: str, site_id: str, period_start: datetime, period_end: datetime) -> int:
-    """DASH_MEMBERS_CHURNED：本期流失数（churned_at 落在期内）。"""
+    """DASH_MEMBERS_CHURNED：本期流失数（churned_at 落在 [期初, 次月 1 日) 内）。"""
+    end_exclusive = _end_exclusive(period_end)
     cond = _company_cond(org_id, site_id) + (
         Company.churned_at.isnot(None),
         Company.churned_at >= period_start,
-        Company.churned_at <= period_end,
+        Company.churned_at < end_exclusive,
     )
     return int(db.scalar(select(func.count()).select_from(Company).where(*cond)) or 0)
 

@@ -1,15 +1,23 @@
-"""验收 1：Each indicator on the fictional data set is consistent with manual calculation (test)。
+"""验收 1：虚构数据集上各指标与手工计算一致（测试）。
 
 两重核对：
 1. 手工计算（写死的期望值，依据 conftest.seed_demo_site 的数据逐企业推算）；
 2. 独立 raw SQL 复算（与 app/dash/metrics.py 不同的实现路径）。
 两者都必须与接口返回一致。
 """
+import re
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import text
 
 from app.dash.cache import overview_cache
-from app.models.company import LIFECYCLE_STATUSES
+from app.models.company import LIFECYCLE_STATUSES, Company
+from app.models.membership import Membership
+
+
+def _dt(day: str) -> datetime:
+    return datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
 
 PERIOD = "2026-10"
 EXPECTED_LIFECYCLE = {
@@ -219,9 +227,9 @@ def test_empty_site_all_zero_metrics(client, seed_demo_site):
     assert m["DASH_MEMBERS_YOY"]["value"] == {"current": 0, "previous": 0, "delta": 0, "change_bp": None}
 
 
-@pytest.mark.parametrize("bad", ["abc", "2026-14", "202601", ""])
+@pytest.mark.parametrize("bad", ["abc", "2026-14", "202601", "", "0000-01", "0001-01", "2026-1"])
 def test_period_rejects_invalid_formats(client, seed_demo_site, bad):
-    """period 非 YYYY-MM（字母、月越界、缺横线、空串）一律 400 统一信封。"""
+    """period 非法一律 400 统一信封：字母、月越界、缺横线、空串、年份越界（0000/0001 会撞 datetime 下限）。"""
     resp = client.get(
         "/api/dash/members/overview",
         params={"site_id": "site-east", "period": bad},
@@ -272,3 +280,108 @@ def test_db_error_returns_envelope_500(pg_engine, seed_demo_site):
     assert body["code"] == 500
     assert body["data"] is None
     assert body["message"] == "internal server error"
+
+
+def test_membership_soft_deleted_excluded(client, seed_demo_site, test_tx):
+    """⑤会籍行自身软删除：只有一条软删会籍的企业，不进 EFFECTIVE_END / NEW_JOINS；
+    企业本身未删，仍进生命周期分布（企业级与会籍级过滤各管各的）。"""
+    session = test_tx
+    c = Company(
+        name="软删会籍企业", org_id="org-demo", site_id="site-east",
+        lifecycle_status="active", verified_at=_dt("2025-01-05T09:00:00"), created_by="t",
+    )
+    session.add(c)
+    session.flush()
+    m_dead = Membership(
+        company_id=c.id, tier="standard", status="effective",
+        start_date="2025-01-06", joined_at=_dt("2025-01-06T09:00:00"),
+        org_id="org-demo", site_id="site-east", created_by="t",
+    )
+    m_dead.deleted_at = _dt("2026-11-01T00:00:00")  # 会籍行自身软删除
+    m_live = Membership(
+        company_id=c.id, tier="advanced", status="effective",
+        start_date="2025-01-10", joined_at=_dt("2025-01-10T09:00:00"),
+        org_id="org-demo", site_id="site-east", created_by="t",
+    )
+    session.add_all([m_dead, m_live])
+    session.flush()
+
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-east", "period": "2025-01"},
+        headers=seed_demo_site["headers"],
+    )
+    assert resp.status_code == 200
+    m = resp.json()["data"]["metrics"]
+    # 该企业 2025-01 只应有 1 条生效会籍（软删那条不计），不修会籍级过滤时会是 2
+    assert m["DASH_MEMBERS_EFFECTIVE_END"]["value"] == 1
+    # 新增入会只数活会籍的 joined_at（软删那条 2025-01-06 不计），不修时会是 2
+    assert m["DASH_MEMBERS_NEW_JOINS"]["value"] == 1
+    # 企业本身未软删，生命周期分布照常计入
+    assert m["DASH_LIFECYCLE_DISTRIBUTION"]["value"]["active"] == 6
+
+
+def test_period_end_boundary_microsecond_included(client, seed_demo_site, test_tx):
+    """③期末最后一刻（微秒）事件计入：verified/churned/joined 落在 23:59:59.999999 都算期内。"""
+    session = test_tx
+    c1 = Company(
+        name="微秒认证企业", org_id="org-demo", site_id="site-east",
+        lifecycle_status="active", verified_at=_dt("2026-10-31T23:59:59.999999"), created_by="t",
+    )
+    session.add(c1)
+    session.flush()
+    session.add(Membership(
+        company_id=c1.id, tier="standard", status="effective",
+        start_date="2026-10-31", joined_at=_dt("2026-10-31T23:59:59.999999"),
+        org_id="org-demo", site_id="site-east", created_by="t",
+    ))
+    c2 = Company(
+        name="微秒流失企业", org_id="org-demo", site_id="site-east",
+        lifecycle_status="churned", verified_at=_dt("2025-02-01T09:00:00"),
+        churned_at=_dt("2026-10-31T23:59:59.999999"), created_by="t",
+    )
+    session.add(c2)
+    session.flush()
+
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-east", "period": "2026-10", "refresh": "1"},
+        headers=seed_demo_site["headers"],
+    )
+    assert resp.status_code == 200
+    m = resp.json()["data"]["metrics"]
+    assert m["DASH_MEMBERS_VERIFIED_END"]["value"] == 9   # 8 + 微秒认证企业
+    assert m["DASH_MEMBERS_EFFECTIVE_END"]["value"] == 8  # 7 + 微秒入会企业
+    assert m["DASH_MEMBERS_NEW_JOINS"]["value"] == 2      # 1 + 微秒入会
+    assert m["DASH_MEMBERS_CHURNED"]["value"] == 2        # 1 + 微秒流失
+
+
+def test_empty_site_default_period_current_month(client, seed_demo_site):
+    """②空站点 + period 缺省：取当前月份返回 200 全 0（新会所首屏），而不是 500。"""
+    resp = client.get(
+        "/api/dash/members/overview",
+        params={"site_id": "site-west"},
+        headers={"X-Org-Id": "org-demo", "X-User-Id": "user-head-west"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", data["period"])
+    m = data["metrics"]
+    assert m["DASH_MEMBERS_VERIFIED_END"]["value"] == 0
+    assert m["DASH_MEMBERS_EFFECTIVE_END"]["value"] == 0
+    assert m["DASH_LIFECYCLE_DISTRIBUTION"]["value"] == {s: 0 for s in LIFECYCLE_STATUSES}
+    assert all(p["effective_members_end"] == 0 for p in m["DASH_TREND_EFFECTIVE_12M"]["value"])
+    assert m["DASH_MEMBERS_MOM"]["value"]["change_bp"] is None
+
+
+def test_route_errors_use_envelope(client, seed_demo_site):
+    """统一信封覆盖路由级 404（不存在路径）与 405（方法不允许）。"""
+    r404 = client.get("/api/nope", headers=seed_demo_site["headers"])
+    assert r404.status_code == 404
+    body = r404.json()
+    assert body["code"] == 404 and body["data"] is None
+
+    r405 = client.post("/api/dash/members/overview", headers=seed_demo_site["headers"])
+    assert r405.status_code == 405
+    body = r405.json()
+    assert body["code"] == 405 and body["data"] is None

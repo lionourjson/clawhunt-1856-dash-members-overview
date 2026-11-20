@@ -21,7 +21,8 @@ CALIBERS: tuple[Caliber, ...] = (
         code="DASH_MEMBERS_VERIFIED_END",
         version="v1.0.0",
         name="认证会员企业数（期末）",
-        definition="期末时点已认证且未流失的会员企业数：verified_at <= 期末，且 churned_at 为空或 > 期末；"
+        definition="期末时点已认证且未流失的会员企业数（时点口径）：verified_at 早于次月 1 日 00:00:00 UTC，"
+        "且 churned_at 为空或不早于次月 1 日 00:00:00 UTC（窗口 [期初, 次月 1 日) 左闭右开，含期末最后一微秒）；"
         "排除测试账号（is_test_account=true）与软删除（deleted_at 非空）数据。",
     ),
     Caliber(
@@ -29,19 +30,21 @@ CALIBERS: tuple[Caliber, ...] = (
         version="v1.0.0",
         name="有效会员企业数（期末，会籍生效中）",
         definition="期末时点存在生效会籍的企业数（按企业去重）：会籍 start_date <= 期末日，"
-        "且 end_date 为空或 >= 期末日，status='effective'；排除测试账号与软删除数据。",
+        "且 end_date 为空或 >= 期末日，status='effective'；排除测试账号、软删除企业与软删除会籍行。",
     ),
     Caliber(
         code="DASH_MEMBERS_NEW_JOINS",
         version="v1.0.0",
         name="本期新增入会数",
-        definition="入会时间 joined_at 落在 [期初, 期末] 的企业数（按企业去重）；排除测试账号与软删除数据。",
+        definition="入会时间 joined_at 落在 [期初, 次月 1 日 00:00:00 UTC) 的企业数（按企业去重，含期末最后一微秒）；"
+        "排除测试账号、软删除企业与软删除会籍行。",
     ),
     Caliber(
         code="DASH_MEMBERS_CHURNED",
         version="v1.0.0",
         name="本期流失数",
-        definition="流失时间 churned_at 落在 [期初, 期末] 的企业数（按企业去重）；排除测试账号与软删除数据。",
+        definition="流失时间 churned_at 落在 [期初, 次月 1 日 00:00:00 UTC) 的企业数（含期末最后一微秒）；"
+        "排除测试账号与软删除数据。",
     ),
     Caliber(
         code="DASH_LIFECYCLE_DISTRIBUTION",
@@ -56,14 +59,14 @@ CALIBERS: tuple[Caliber, ...] = (
         version="v1.0.0",
         name="会员等级分布",
         definition="期末时点有效会员企业按其生效会籍等级（standard/advanced/premium）分布；"
-        "同一企业取 joined_at 最晚的一条生效会籍；排除测试账号与软删除数据。",
+        "同一企业取 joined_at 最晚的一条生效会籍；排除测试账号、软删除企业与软删除会籍行。",
     ),
     Caliber(
         code="DASH_TREND_EFFECTIVE_12M",
         version="v1.0.0",
         name="近 12 个月期末有效会员数趋势",
         definition="以本期所在月为最后一月，往前共 12 个月，每月按 DASH_MEMBERS_EFFECTIVE_END 口径"
-        "计算该月末（当月最后一天 23:59:59 UTC）的有效会员企业数。",
+        "计算该月期末（[该月 1 日 00:00:00, 次月 1 日 00:00:00) 窗口）的有效会员企业数。",
     ),
     Caliber(
         code="DASH_MEMBERS_MOM",

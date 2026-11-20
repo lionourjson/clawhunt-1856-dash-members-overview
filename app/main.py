@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.dash.service import InvalidPeriod, get_overview
 from app.db import get_db
@@ -28,8 +29,10 @@ def _envelope(code: int, message: str, data=None, **meta) -> dict:
     return body
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_envelope(request: Request, exc: HTTPException) -> JSONResponse:
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """统一信封覆盖所有 HTTP 错误，含路由级 404（不存在路径）/405（方法不允许）：
+    fastapi.HTTPException 是 StarletteHTTPException 的子类，同一 handler 覆盖。"""
     return JSONResponse(status_code=exc.status_code, content=_envelope(exc.status_code, str(exc.detail)))
 
 

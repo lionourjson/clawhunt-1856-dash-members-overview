@@ -48,20 +48,24 @@ def pg_engine() -> Generator[Engine, None, None]:
     _ensure_test_db(DATABASE_ADMIN_URL, TEST_DB_URL)
     engine = create_engine(TEST_DB_URL, future=True)
     Base.metadata.create_all(engine)
-    # 口径库种子（与迁移 0001 同源）
+    # 口径库种子（与迁移 0001/0002 同源：列结构含 AuditMixin，平台行 org/site 记 platform）
     with engine.begin() as conn:
         conn.execute(
             text(
-                "insert into metric_calibers (id, code, version, name, definition) "
-                "values (:id, :code, :version, :name, :definition) on conflict (code) do nothing"
+                "insert into metric_calibers (id, org_id, site_id, code, version, name, definition, created_by) "
+                "values (:id, :org_id, :site_id, :code, :version, :name, :definition, :created_by) "
+                "on conflict (code) do nothing"
             ),
             [
                 {
                     "id": new_uuid(),
+                    "org_id": "platform",
+                    "site_id": "platform",
                     "code": c.code,
                     "version": c.version,
                     "name": c.name,
                     "definition": c.definition,
+                    "created_by": "conftest",
                 }
                 for c in CALIBERS
             ],

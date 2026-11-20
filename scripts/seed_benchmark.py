@@ -33,6 +33,13 @@ def main() -> None:
         raise SystemExit("export APP_DATABASE_URL first (see .env.example)")
     rng = random.Random(1856)
     engine = create_engine(url, future=True)
+    try:
+        _seed(engine, rng)
+    finally:
+        engine.dispose()
+
+
+def _seed(engine, rng: random.Random) -> None:
 
     company_rows = []
     membership_rows = []
@@ -102,15 +109,19 @@ def main() -> None:
     ]
 
     with engine.begin() as conn:
+        # 幂等：先清掉上一轮 seed_benchmark 写入的行（先子表后父表；uuid5 固定主键，直接重插会主键冲突）
+        from sqlalchemy import delete as _delete, text
+
+        conn.execute(_delete(Membership).where(Membership.created_by == "seed_benchmark"))
+        conn.execute(_delete(UserRole).where(UserRole.created_by == "seed_benchmark"))
+        conn.execute(_delete(Company).where(Company.created_by == "seed_benchmark"))
         conn.execute(insert(Company), company_rows)
         conn.execute(insert(Membership), membership_rows)
         conn.execute(insert(UserRole), role_rows)
         # 关键：bulk insert 后 ANALYZE，否则 planner 在空表统计下会选灾难性计划
-        from sqlalchemy import text
-
         conn.execute(text("analyze companies"))
         conn.execute(text("analyze memberships"))
-    print(f"seeded benchmark: {len(company_rows)} companies, {len(membership_rows)} memberships, {len(role_rows)} user_roles (org={ORG}, all fictional, seed=1856)")
+    print(f"seeded benchmark (idempotent re-run safe): {len(company_rows)} companies, {len(membership_rows)} memberships, {len(role_rows)} user_roles (org={ORG}, all fictional, seed=1856)")
 
 
 if __name__ == "__main__":

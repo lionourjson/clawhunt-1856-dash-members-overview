@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import create_engine, delete  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from app.models import Company, Membership, UserRole  # noqa: E402
@@ -85,8 +85,20 @@ def main() -> None:
     if not url:
         raise SystemExit("export APP_DATABASE_URL first (see .env.example)")
     engine = create_engine(url, future=True)
+    try:
+        _seed(engine)
+    finally:
+        engine.dispose()
+
+
+def _seed(engine) -> None:
     name_by_key: dict[str, Company] = {}
     with Session(engine) as db:
+        # 幂等：先清掉上一轮 seed_demo 写入的行（先子表后父表），重跑结果一致不翻倍
+        db.execute(delete(Membership).where(Membership.created_by == "seed_demo"))
+        db.execute(delete(UserRole).where(UserRole.created_by == "seed_demo"))
+        db.execute(delete(Company).where(Company.created_by == "seed_demo"))
+        db.flush()
         created = 0
         for name, org, site, status, verified, churned, is_test in COMPANIES:
             company = Company(
@@ -124,7 +136,7 @@ def main() -> None:
         for user_id, org, site, role in USER_ROLES:
             db.add(UserRole(user_id=user_id, org_id=org, site_id=site, role=role, created_by="seed_demo"))
         db.commit()
-    print(f"seeded: {created} companies, {len(MEMBERSHIPS)} memberships, {len(USER_ROLES)} user_roles (all fictional)")
+    print(f"seeded (idempotent re-run safe): {created} companies, {len(MEMBERSHIPS)} memberships, {len(USER_ROLES)} user_roles (all fictional)")
 
 
 if __name__ == "__main__":
