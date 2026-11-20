@@ -130,76 +130,96 @@ set APP_BENCHMARK_BASE_URL=http://127.0.0.1:8303
 .venv/Scripts/python.exe scripts/benchmark_overview.py --requests 30 --refresh # 绕过缓存
 ```
 
-## 验证记录（真实命令与原始输出，2026-11-21 干净目录匿名 clone 重跑）
+## 验证记录（真实命令与原始输出；第 2 版，2026-11-21 干净目录匿名 clone 重跑 commit dfba0ff）
 
 环境：Windows 11（10.0.26200 x64）、PostgreSQL 16.10（本机 127.0.0.1:5432，psql 16.10）、Python 3.14.3；依赖版本来自干净 venv 的 pip list：fastapi 0.118.0、uvicorn 0.37.0、SQLAlchemy 2.0.44、alembic 1.16.5、psycopg 3.2.10、pydantic 2.12.3、pytest 8.4.2、httpx 0.28.1。
-复跑方式：`git -c credential.helper= clone https://github.com/lionourjson/clawhunt-1856-dash-members-overview.git`（无登录凭据的匿名 clone），建干净 venv 后 pip install -r requirements.txt。
+复跑方式：`git -c credential.helper= clone https://github.com/lionourjson/clawhunt-1856-dash-members-overview.git`（无登录凭据的匿名 clone，HEAD=dfba0ff），建干净 venv 后 pip install -r requirements.txt。
 
-### 建库与迁移往返（upgrade head → downgrade base → upgrade head）
+### 建库与迁移往返（upgrade head → downgrade base → upgrade head，0001+0002）
 
 ```
 psql：drop database if exists dash_members / dash_members_test，create database ×2
 INFO  [alembic.runtime.migration] Running upgrade  -> 0001, 初始迁移：驾驶舱聚合接口数据表 + 口径库种子数据。
-INFO  [alembic.runtime.migration] Running downgrade 0001 -> , 初始迁移：驾驶舱聚合接口数据表 + 口径库种子数据。
-INFO  [alembic.runtime.migration] Running upgrade  -> 0001, 初始迁移：驾驶舱聚合接口数据表 + 口径库种子数据。
-（随后 psql 查询 metric_calibers 行数 = 9）
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, 0002：metric_calibers 补统一基类字段（org_id/site_id/created_at/created_by/deleted_at）。
+INFO  [alembic.runtime.migration] Running downgrade 0002 -> 0001, 0002：…
+INFO  [alembic.runtime.migration] Running downgrade 0001 -> , 初始迁移：…
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, 初始迁移：…
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, 0002：…
+（随后 psql：metric_calibers 行数 = 9；列 = id, code, version, name, definition, updated_at,
+ org_id, site_id, created_at, created_by, deleted_at —— 统一基类 7 字段齐全）
 ```
 
-### pytest 全套（真实 PostgreSQL 16，37 条）
+### pytest 全套（真实 PostgreSQL 16，45 条）
 
 ```
-configfile: pytest.ini
-testpaths: tests
-plugins: anyio-4.16.0
-collecting ... collected 37 items
+collecting ... collected 45 items
 
 tests/test_benchmark_10000.py::test_p95_under_1s PASSED                  [  2%]
-tests/test_caliber.py::test_all_nine_metrics_present PASSED              [  5%]
-tests/test_caliber.py::test_every_metric_has_caliber_version PASSED      [  8%]
-tests/test_caliber.py::test_caliber_library_version_in_response PASSED   [ 10%]
-tests/test_caliber.py::test_registry_matches_caliber_library PASSED      [ 13%]
-tests/test_caliber.py::test_caliber_definitions_persisted PASSED         [ 16%]
-tests/test_overview_calc.py::test_envelope_shape PASSED                  [ 18%]
-tests/test_overview_calc.py::test_verified_members_end_manual PASSED     [ 21%]
-tests/test_overview_calc.py::test_effective_members_end_manual PASSED    [ 24%]
-tests/test_overview_calc.py::test_new_joins_manual PASSED                [ 27%]
-tests/test_overview_calc.py::test_churned_manual PASSED                  [ 29%]
-tests/test_overview_calc.py::test_lifecycle_distribution_manual PASSED   [ 32%]
-tests/test_overview_calc.py::test_tier_distribution_manual PASSED        [ 35%]
-tests/test_overview_calc.py::test_trend_12m_manual PASSED                [ 37%]
-tests/test_overview_calc.py::test_mom_manual PASSED                      [ 40%]
-tests/test_overview_calc.py::test_yoy_manual PASSED                      [ 43%]
-tests/test_overview_calc.py::test_sql_cross_check_matches_api PASSED     [ 45%]
-tests/test_overview_calc.py::test_test_account_and_deleted_excluded PASSED [ 48%]
-tests/test_overview_calc.py::test_invalid_period_rejected PASSED         [ 51%]
-tests/test_overview_calc.py::test_default_period_is_latest_activity_month PASSED [ 54%]
-tests/test_overview_calc.py::test_cache_second_call_is_cached PASSED     [ 56%]
-tests/test_overview_calc.py::test_empty_site_all_zero_metrics PASSED     [ 59%]
-tests/test_overview_calc.py::test_period_rejects_invalid_formats[abc] PASSED [ 62%]
-tests/test_overview_calc.py::test_period_rejects_invalid_formats[2026-14] PASSED [ 64%]
-tests/test_overview_calc.py::test_period_rejects_invalid_formats[202601] PASSED [ 67%]
-tests/test_overview_calc.py::test_period_rejects_invalid_formats[] PASSED [ 70%]
-tests/test_overview_calc.py::test_cache_disabled_when_ttl_zero PASSED    [ 72%]
-tests/test_overview_calc.py::test_db_error_returns_envelope_500 PASSED   [ 75%]
-tests/test_permission.py::test_club_head_can_read_own_site PASSED        [ 78%]
-tests/test_permission.py::test_club_head_cannot_read_other_site PASSED   [ 81%]
-tests/test_permission.py::test_club_head_cannot_read_other_org_site PASSED [ 83%]
+tests/test_caliber.py::test_all_nine_metrics_present PASSED              [  4%]
+tests/test_caliber.py::test_every_metric_has_caliber_version PASSED      [  6%]
+tests/test_caliber.py::test_caliber_library_version_in_response PASSED   [  8%]
+tests/test_caliber.py::test_registry_matches_caliber_library PASSED      [ 11%]
+tests/test_caliber.py::test_caliber_definitions_persisted PASSED         [ 13%]
+tests/test_overview_calc.py::test_envelope_shape PASSED                  [ 15%]
+tests/test_overview_calc.py::test_verified_members_end_manual PASSED     [ 17%]
+tests/test_overview_calc.py::test_effective_members_end_manual PASSED    [ 20%]
+tests/test_overview_calc.py::test_new_joins_manual PASSED                [ 22%]
+tests/test_overview_calc.py::test_churned_manual PASSED                  [ 24%]
+tests/test_overview_calc.py::test_lifecycle_distribution_manual PASSED   [ 26%]
+tests/test_overview_calc.py::test_tier_distribution_manual PASSED        [ 28%]
+tests/test_overview_calc.py::test_trend_12m_manual PASSED                [ 31%]
+tests/test_overview_calc.py::test_mom_manual PASSED                      [ 33%]
+tests/test_overview_calc.py::test_yoy_manual PASSED                      [ 35%]
+tests/test_overview_calc.py::test_sql_cross_check_matches_api PASSED     [ 37%]
+tests/test_overview_calc.py::test_test_account_and_deleted_excluded PASSED [ 40%]
+tests/test_overview_calc.py::test_invalid_period_rejected PASSED         [ 42%]
+tests/test_overview_calc.py::test_default_period_is_latest_activity_month PASSED [ 44%]
+tests/test_overview_calc.py::test_cache_second_call_is_cached PASSED     [ 46%]
+tests/test_overview_calc.py::test_empty_site_all_zero_metrics PASSED     [ 48%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[abc] PASSED [ 51%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[2026-14] PASSED [ 53%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[202601] PASSED [ 55%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[] PASSED [ 57%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[0000-01] PASSED [ 60%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[0001-01] PASSED [ 62%]
+tests/test_overview_calc.py::test_period_rejects_invalid_formats[2026-1] PASSED [ 64%]
+tests/test_overview_calc.py::test_cache_disabled_when_ttl_zero PASSED    [ 66%]
+tests/test_overview_calc.py::test_db_error_returns_envelope_500 PASSED   [ 68%]
+tests/test_overview_calc.py::test_membership_soft_deleted_excluded PASSED [ 71%]
+tests/test_overview_calc.py::test_period_end_boundary_microsecond_included PASSED [ 73%]
+tests/test_overview_calc.py::test_empty_site_default_period_current_month PASSED [ 75%]
+tests/test_overview_calc.py::test_route_errors_use_envelope PASSED       [ 77%]
+tests/test_permission.py::test_club_head_can_read_own_site PASSED        [ 80%]
+tests/test_permission.py::test_club_head_cannot_read_other_site PASSED   [ 82%]
+tests/test_permission.py::test_club_head_cannot_read_other_org_site PASSED [ 84%]
 tests/test_permission.py::test_org_mismatch_rejected PASSED              [ 86%]
-tests/test_permission.py::test_unknown_user_rejected PASSED              [ 89%]
+tests/test_permission.py::test_unknown_user_rejected PASSED              [ 88%]
 tests/test_permission.py::test_missing_headers_rejected PASSED           [ 91%]
-tests/test_permission.py::test_missing_site_id_rejected PASSED           [ 94%]
-tests/test_permission.py::test_admin_can_read_authorized_sites PASSED    [ 97%]
-tests/test_permission.py::test_role_name_alone_grants_nothing PASSED     [100%]
+tests/test_permission.py::test_missing_site_id_rejected PASSED           [ 93%]
+tests/test_permission.py::test_admin_can_read_authorized_sites PASSED    [ 95%]
+tests/test_permission.py::test_role_name_alone_grants_nothing PASSED     [ 97%]
+tests/test_seed_idempotent.py::test_seed_scripts_idempotent PASSED       [100%]
 
-======================= 37 passed, 13 warnings in 3.79s =======================
+======================= 45 passed, 16 warnings in 7.29s =======================
 ```
 
 benchmark 用例 -s 输出（30 次 refresh=1 全链路请求）：
-`benchmark: n=30 p50=56.8ms p95=61.7ms max=61.8ms mean=56.8ms`（1 passed in 2.70s）
+`benchmark: n=30 p50=55.2ms p95=58.2ms max=59.0ms mean=55.5ms`（1 passed in 2.59s）
 
-warnings 说明：13 条均为 DeprecationWarning（starlette testclient 的 anyio 别名，依赖库内部）与 SAWarning（测试夹具事务回滚顺序提示），不影响结果。
+warnings 说明：16 条均为 DeprecationWarning（starlette testclient 的 anyio 别名，依赖库内部）与 SAWarning（测试夹具事务回滚顺序提示），不影响结果。
 
-### uvicorn 冒烟（演示数据集，org-demo/site-east，period=2026-10）
+### seed 脚本幂等实测（各连跑两遍，psql 复核行数）
+
+```
+seeded (idempotent re-run safe): 22 companies, 19 memberships, 5 user_roles (all fictional)
+seeded (idempotent re-run safe): 22 companies, 19 memberships, 5 user_roles (all fictional)
+psql count(companies where created_by='seed_demo') = 22（不翻倍）
+seeded benchmark (idempotent re-run safe): 10000 companies, 6108 memberships, 2 user_roles (org=org-bench, all fictional, seed=1856)
+seeded benchmark (idempotent re-run safe): 10000 companies, 6108 memberships, 2 user_roles (org=org-bench, all fictional, seed=1856)
+psql count(companies where created_by='seed_benchmark') = 10000（无主键冲突）
+```
+
+### uvicorn 冒烟（演示数据集 org-demo，独立 uvicorn 进程）
 
 ```
 GET /healthz
@@ -215,8 +235,7 @@ GET /api/dash/members/overview?site_id=site-east&period=2026-10   （会长 user
   "DASH_MEMBERS_CHURNED":{"value":1,...},
   "DASH_LIFECYCLE_DISTRIBUTION":{"value":{"lead":1,"negotiating":1,"joined":1,"active":5,"silent":1,"churn_warning":1,"churned":2},...},
   "DASH_TIER_DISTRIBUTION":{"value":{"advanced":3,"premium":2,"standard":2},...},
-  "DASH_TREND_EFFECTIVE_12M":{"value":[{"month":"2025-11","effective_members_end":6},{"month":"2025-12","effective_members_end":7},...,
-                                        {"month":"2026-08","effective_members_end":8},...,{"month":"2026-10","effective_members_end":7}],...},
+  "DASH_TREND_EFFECTIVE_12M":{"value":[{"month":"2025-11","effective_members_end":6},...,{"month":"2026-08","effective_members_end":8},...,{"month":"2026-10","effective_members_end":7}],...},
   "DASH_MEMBERS_MOM":{"value":{"current":7,"previous":7,"delta":0,"change_bp":0},...},
   "DASH_MEMBERS_YOY":{"value":{"current":7,"previous":6,"delta":1,"change_bp":1667},...}},
  "meta":{"cached":false}}（每个指标都带 caliber_code/caliber_version=v1.0.0，与手算逐项一致）
@@ -225,21 +244,28 @@ GET 同参第二次    → meta {"cached": true}（10 分钟缓存命中）
 GET ?refresh=1    → meta {"cached": false}
 GET ?site_id=site-west（会长 east）→ HTTP 403 {"code":403,"message":"user user-head-east has no access to site site-west","data":null}
 GET ?period=2026-13 → HTTP 400 {"code":400,"message":"period must be YYYY-MM, got '2026-13'","data":null}
+GET ?period=0000-01 → HTTP 400 {"code":400,"message":"period year must be >= 1970, got '0000-01'","data":null}（新）
+POST 同路径        → HTTP 405 {"code":405,"message":"Method Not Allowed","data":null}（新）
+GET /api/nope     → HTTP 404 {"code":404,"message":"Not Found","data":null}（新）
+GET ?site_id=site-west（会长 west，无 period）→ HTTP 200，period=2026-10（site-west 有业务数据：鹿鸣/雁栖/砚台/孤山，
+  缺省取最近业务月份，VERIFIED=4/EFFECTIVE=3/NEW_JOINS=1，与数据一致）（新）
+GET ?site_id=site-empty（临时授权行 user-head-empty，无 period）→ HTTP 200，period=2026-11（当前月），
+  9 指标全 0/空、趋势 12 点全 0 —— 新会所空数据首屏不再 500（新）
 ```
 
 ### HTTP 基准（10,000 家虚构企业，org-bench/site-bench-1，独立 uvicorn 进程）
 
-基准脚本默认目标 8000 端口；本轮服务起在 8303，用 `APP_BENCHMARK_BASE_URL=http://127.0.0.1:8303` 指定（脚本自带的环境变量，见 scripts/benchmark_overview.py）。
+基准脚本默认目标 8000 端口；本轮服务起在 8304，用 `APP_BENCHMARK_BASE_URL=http://127.0.0.1:8304` 指定（脚本自带的环境变量，见 scripts/benchmark_overview.py）。
 
 ```
 === 缓存命中（100 次请求）===
 预热请求 OK：effective_members_end=2421（period=2026-07）
-{"requests":100,"status_codes":{"200":100},"p50_ms":29.3,"p95_ms":36.7,"p99_ms":39.7,"max_ms":42.1,"mean_ms":23.8,"refresh":false}
+{"requests":100,"status_codes":{"200":100},"p50_ms":30.1,"p95_ms":38.1,"p99_ms":40.3,"max_ms":40.8,"mean_ms":25.9,"refresh":false}
 P95 < 1000ms: PASS
 
 === 绕过缓存 refresh=1（30 次请求，完整计算链路）===
 预热请求 OK：effective_members_end=2421（period=2026-07）
-{"requests":30,"status_codes":{"200":30},"p50_ms":77.1,"p95_ms":116.5,"p99_ms":118.6,"max_ms":118.6,"mean_ms":78.8,"refresh":true}
+{"requests":30,"status_codes":{"200":30},"p50_ms":80.5,"p95_ms":104.5,"p99_ms":125.0,"max_ms":125.0,"mean_ms":81.2,"refresh":true}
 P95 < 1000ms: PASS
 ```
 
