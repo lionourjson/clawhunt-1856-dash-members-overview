@@ -10,7 +10,7 @@
 
 （工单 zh-CN 原文；预做包构建时平台返回英文版 "Each indicator on the fictional data set is consistent with manual calculation (test)"，语义相同。）
 
-- **实现**：`tests/test_overview_calc.py`，29 条用例。夹具 `seed_demo_site`（`tests/conftest.py`）固定虚构站点 org-demo/site-east：14 家企业（12 家有效 + 1 家测试账号 + 1 家软删除）、12 条会籍，覆盖 2025-01 ~ 2026-10。
+- **实现**：`tests/test_overview_calc.py`，33 条用例。夹具 `seed_demo_site`（`tests/conftest.py`）固定虚构站点 org-demo/site-east：14 家企业（12 家有效 + 1 家测试账号 + 1 家软删除）、12 条会籍，覆盖 2025-01 ~ 2026-10。
 - **手工计算**（逐企业推算，2026-10 期末窗口 = [2026-10-01T00:00:00, 2026-11-01T00:00:00) 左闭右开；展示 period_end=2026-10-31T23:59:59 UTC）：
   - 认证会员企业数（期末）= 8（云帆智造/东湖新材料/南屿数字/临江生物/青梧设计/云杉检测/汀兰文化/榕城会展；白鹭物流 2026-09-14 流失、南风咨询 2026-10-05 流失不计入）
   - 有效会员企业数（期末）= 7（南风咨询会籍 2026-10-05 止、白鹭物流 2026-09-14 止不计入）
@@ -83,7 +83,7 @@
 
 | 边界类 | 本单处理 | 测试 |
 | --- | --- | --- |
-| ① 正常路径 | 9 指标手算逐项一致 + 独立 raw SQL 复算 | test_overview_calc 29 条 |
+| ① 正常路径 | 9 指标手算逐项一致 + 独立 raw SQL 复算 | test_overview_calc 33 条 |
 | ② 空输入/空数据 | 空站点显式 period → 全指标 0/空、7 键恒全返回（test_empty_site_all_zero_metrics）；空站点 + period 缺省 → 取当前月份返回 200 全 0（新会所首屏，不报 500）；有数据站点 period 缺省 → 取数据集最近业务月份 | test_empty_site_default_period_current_month、test_default_period_is_latest_activity_month |
 | ③ 上限/边界时刻 | 1 万企业规模基准（工单规模点）P95 < 1 秒；期末最后一微秒（23:59:59.999999）的认证/流失/入会计入期内（[期初, 次月 1 日) 左闭右开）；period 上界 9999-12（次月超 datetime 上限）→ 400，邻值 9999-11 可正常计算 | test_benchmark_10000、test_period_end_boundary_microsecond_included、test_period_rejects_invalid_formats[9999-12]、test_period_upper_bound_9999_11_accepted |
 | ④ 格式/类型不对 | period 非法（字母/月越界/缺横线/空串/年份越界 0000-01、0001-01、2026-1、9999-12）→ 400（越出 [1970-01, 9999-11) 支持范围一律拒绝不进计算，客户端输入错误不映射 500）；缺权限头或缺 site_id → 422；路由级 404/405 → 统一信封 | test_invalid_period_rejected、test_period_rejects_invalid_formats（8 例）、test_missing_headers_rejected、test_missing_site_id_rejected、test_route_errors_use_envelope |
